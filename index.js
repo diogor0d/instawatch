@@ -88,12 +88,50 @@ app.get('/thread/:id', async (req, res) => {
     // Limit to requested number
     const limitedMessages = allMessages.slice(0, limit);
     
+    // Get thread users from inbox (more efficient)
+    const inboxFeed = ig.feed.directInbox();
+    const threads = await inboxFeed.items();
+    const currentThread = threads.find(t => t.thread_id === req.params.id);
+    const threadUsers = currentThread ? currentThread.users : [];
+    
+    // If thread not found in inbox, fallback to extracting users from messages
+    if (threadUsers.length === 0) {
+      const userIds = [...new Set(limitedMessages.map(msg => msg.user_id))];
+      
+      for (const userId of userIds) {
+        try {
+          const userInfo = await ig.user.info(userId);
+          threadUsers.push({
+            pk: userInfo.pk,
+            username: userInfo.username,
+            full_name: userInfo.full_name,
+            profile_pic_url: userInfo.profile_pic_url
+          });
+        } catch (err) {
+          console.warn(`Could not fetch user info for ${userId}:`, err.message);
+          threadUsers.push({
+            pk: userId,
+            username: 'Unknown User',
+            full_name: 'Unknown User',
+            profile_pic_url: null
+          });
+        }
+      }
+    }
+    
     const messages = limitedMessages.map(msg => {
+      // Find sender info from thread users
+      const sender = threadUsers.find(u => u.pk === msg.user_id);
+      const senderName = sender ? sender.username : 'Unknown User';
+      
       const baseMessage = {
         id: msg.item_id,
         user: msg.user_id,
         timestamp: msg.timestamp,
-        type: msg.item_type
+        type: msg.item_type,
+        senderName: senderName,
+        senderUsername: sender ? sender.username : null,
+        senderProfilePic: sender ? sender.profile_pic_url : null
       };
 
       // Apple Watch optimized message handling
@@ -116,7 +154,6 @@ app.get('/thread/:id', async (req, res) => {
             contentType: 'media',
             mediaType: mediaType,
             icon: mediaType === 'photo' ? '📷' : '🎬',
-            // Don't include full URLs for watch - can be fetched separately if needed
             hasMedia: true
           };
         
@@ -182,9 +219,21 @@ app.get('/thread/:id', async (req, res) => {
       messages,
       total: messages.length,
       hasMore: threadFeed.isMoreAvailable(),
-      requestedLimit: limit
+      requestedLimit: limit,
+      threadInfo: {
+        id: req.params.id,
+        title: currentThread?.thread_title || (threadUsers.length > 1 ? `Group Chat (${threadUsers.length} users)` : threadUsers[0]?.username || 'Chat'),
+        users: threadUsers.map(u => ({
+          id: u.pk,
+          username: u.username,
+          fullName: u.full_name,
+          profilePic: u.profile_pic_url
+        })),
+        isGroup: threadUsers.length > 1
+      }
     });
   } catch (err) {
+    console.error('Thread fetch error:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -260,6 +309,18 @@ app.get('/watch/unread-count', async (req, res) => {
       unreadCount,
       totalThreads: threads.length,
       timestamp: Date.now()
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/me', async (req, res) => {
+  try {
+    const user = await ig.user.info(ig.state.cookieUserId);
+    res.json({ 
+      userId: ig.state.cookieUserId,
+      username: user.username 
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
