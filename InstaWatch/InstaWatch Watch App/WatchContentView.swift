@@ -28,7 +28,9 @@ struct WatchContentView: View {
                     }
                 } else {
                     List(threads) { thread in
-                        WatchThreadRowView(thread: thread)
+                        NavigationLink(destination: WatchThreadView(thread: thread)) {
+                            WatchThreadRowView(thread: thread)
+                        }
                     }
                 }
             }
